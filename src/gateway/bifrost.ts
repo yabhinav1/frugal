@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { HOME, budgetOf, configuredProviders, providerKeyEnvs, type Config } from '../config.ts';
+import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { HOME, configuredProviders, providerKeyEnvs, type Config } from '../config.ts';
+import { readJson, writeJsonAtomic } from '../util.ts';
 
 export const BIFROST_DIR = process.env.FRUGAL_BIFROST_DIR || path.join(HOME, 'bifrost');
 
@@ -45,20 +48,25 @@ export function buildBifrostConfig(cfg: Config): Record<string, unknown> {
   };
 
   const allow = (provider: string) => ({ provider, allowed_models: ['*'], key_ids: ['*'], weight: 1.0 });
-  const vkCloud = `vk-${cfg.user}`;
-  const vkLocal = `vk-${cfg.user}-local`;
+  const slug = (user: string) => user.replace(/[^\w.-]+/g, '_');
+
+  // Every known user gets their own pair of keys and their own budget at the gateway.
+  const virtual_keys: unknown[] = [];
+  const budgets: unknown[] = [];
+  for (const [user, keys] of Object.entries(cfg.userKeys).sort(([a], [b]) => a.localeCompare(b))) {
+    const limit = cfg.userBudgets[user] ?? cfg.budget;
+    virtual_keys.push(
+      { id: `vk-${slug(user)}`, name: user, value: keys.cloud, is_active: true, provider_configs: [...cloud, 'ollama'].map(allow) },
+      { id: `vk-${slug(user)}-local`, name: `${user}-local`, value: keys.local, is_active: true, provider_configs: [allow('ollama')] },
+    );
+    budgets.push({ id: `budget-${slug(user)}`, max_limit: limit.limitUsd, reset_duration: RESET[limit.period], virtual_key_id: `vk-${slug(user)}` });
+  }
 
   return {
     $schema: 'https://www.getbifrost.ai/schema',
     client: { enable_logging: true, enforce_auth_on_inference: true, drop_excess_requests: false },
     providers,
-    governance: {
-      virtual_keys: [
-        { id: vkCloud, name: cfg.user, value: cfg.virtualKeys.cloud, is_active: true, provider_configs: [...cloud, 'ollama'].map(allow) },
-        { id: vkLocal, name: `${cfg.user}-local`, value: cfg.virtualKeys.local, is_active: true, provider_configs: [allow('ollama')] },
-      ],
-      budgets: [{ id: `budget-${cfg.user}`, max_limit: budgetOf(cfg).limitUsd, reset_duration: RESET[budgetOf(cfg).period], virtual_key_id: vkCloud }],
-    },
+    governance: { virtual_keys, budgets },
   };
 }
 
@@ -85,14 +93,63 @@ export function startGateway(cfg: Config, mode: 'foreground' | 'detached' = 'for
     detached: mode === 'detached',
     windowsHide: true,
   });
-  if (mode === 'detached') child.unref();
+  if (mode === 'detached') {
+    child.unref();
+    // Remember what this gateway was started with, so a later config change can restart it.
+    writeJsonAtomic(STATE, { hash: configHash(cfg), startedAt: new Date().toISOString() });
+  } else fs.rmSync(STATE, { force: true }); // a gateway run by hand is never restarted for the user
   return child;
 }
 
-/** Make sure a gateway is serving, starting one in the background if needed. */
-export async function ensureGateway(cfg: Config, onWait?: () => void, timeoutMs = 90_000): Promise<boolean> {
-  if (await gatewayHealthy(cfg)) return true;
-  onWait?.();
+const STATE = path.join(HOME, 'gateway.json');
+
+/** Fingerprint of everything the gateway is started with: its config and the API keys behind it. */
+function configHash(cfg: Config): string {
+  const keys = configuredProviders().flatMap((p) => providerKeyEnvs(p).map((env) => `${env}=${process.env[env]}`));
+  return crypto.createHash('sha256').update(JSON.stringify(buildBifrostConfig(cfg))).update(keys.join('\n')).digest('hex').slice(0, 16);
+}
+
+/** The process listening on the gateway's port, if it is a Bifrost process. */
+function gatewayPid(cfg: Config): number | null {
+  const port = Number(new URL(cfg.gatewayUrl).port) || 8080;
+  if (process.platform === 'win32') {
+    const net = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true }).stdout ?? '';
+    const line = net.split(/\r?\n/).find((l) => /LISTENING/.test(l) && new RegExp(`:${port}\\s`).test(l));
+    const pid = Number(line?.trim().split(/\s+/).pop());
+    if (!pid) return null;
+    const name = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).stdout ?? '';
+    return /bifrost/i.test(name) ? pid : null;
+  }
+  const pid = Number((spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout ?? '').trim().split('\n')[0]);
+  if (!pid) return null;
+  const name = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).stdout ?? '';
+  return /bifrost/i.test(name) ? pid : null;
+}
+
+/** Stop the Bifrost process on the gateway port. Anything else on that port is left alone. */
+export async function stopGateway(cfg: Config): Promise<boolean> {
+  const pid = gatewayPid(cfg);
+  if (!pid) return false;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+  else process.kill(pid, 'SIGTERM');
+  for (let i = 0; i < 20 && (await gatewayHealthy(cfg, 500)); i++) await new Promise((r) => setTimeout(r, 250));
+  fs.rmSync(STATE, { force: true });
+  return true;
+}
+
+/**
+ * Make sure a gateway is serving with the current settings. Starts one in the background if
+ * none is running. If the one running is ours and was started before the keys, users or budgets
+ * changed, it is restarted so the change takes effect; a gateway someone started by hand is
+ * left alone.
+ */
+export async function ensureGateway(cfg: Config, onWait?: (why: 'starting' | 'restarting') => void, timeoutMs = 90_000): Promise<boolean> {
+  if (await gatewayHealthy(cfg)) {
+    const state = readJson<{ hash?: string } | null>(STATE, null);
+    if (!state || state.hash === configHash(cfg)) return true;
+    onWait?.('restarting');
+    await stopGateway(cfg);
+  } else onWait?.('starting');
   startGateway(cfg, 'detached');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

@@ -310,7 +310,7 @@ export class Agent {
       // Raising a limit raises it for this user only.
       this.cfg.userBudgets[this.cfg.user] = { limitUsd: choice.limitUsd, period: err.status.period };
       updateStoredConfig({ userBudgets: this.cfg.userBudgets });
-      this.frontend.emit({ type: 'notice', level: 'info', text: `Limit raised to $${choice.limitUsd.toFixed(2)}. Restart the gateway (frugal gateway) to apply it there too.` });
+      this.frontend.emit({ type: 'notice', level: 'info', text: `Limit raised to $${choice.limitUsd.toFixed(2)}. The gateway applies it the next time frugal starts.` });
       this.frontend.emit({ type: 'budget', status: this.budget.status() });
       return true;
     }

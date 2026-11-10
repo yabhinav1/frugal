@@ -258,7 +258,7 @@ export class Router {
         throw new BudgetExceededError(this.budget.status(), 0);
       }
       const retryable = res.status === 429 || res.status === 408 || res.status >= 500;
-      const hint = res.status === 401 ? ' The gateway does not know this user\'s key: stop it and run "frugal gateway" to reload its config.' : '';
+      const hint = res.status === 401 ? ' The gateway does not know this user\'s key. Run: frugal gateway restart' : '';
       last = new ModelError(`HTTP ${res.status}: ${msg}${hint}`, res.status, retryable);
       if (!retryable) throw last;
     }

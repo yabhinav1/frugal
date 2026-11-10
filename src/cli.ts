@@ -5,8 +5,8 @@ import path from 'node:path';
 import { Agent } from './agent.ts';
 import type { PreApprovals } from './approval.ts';
 import { Budget } from './budget.ts';
-import { CONFIG_FILE, HOME, PROVIDER_KEY_ENV, budgetOf, configuredProviders, loadConfig, loadEnv, providerKeyEnvs, updateStoredConfig, type Config } from './config.ts';
-import { BIFROST_DIR, ensureGateway, gatewayHealthy, startGateway, writeBifrostConfig } from './gateway/bifrost.ts';
+import { CONFIG_FILE, HOME, PROVIDER_KEY_ENV, budgetOf, configuredProviders, loadConfig, loadEnv, providerKeyEnvs, setUser, updateStoredConfig, type Config } from './config.ts';
+import { BIFROST_DIR, ensureGateway, gatewayHealthy, startGateway, stopGateway, writeBifrostConfig } from './gateway/bifrost.ts';
 import { checkKeys } from './gateway/keys.ts';
 import { ensureLocalModel } from './gateway/ollama.ts';
 import { findRepoRoot, markConfidential, resolvePolicy, unmarkConfidential, type Policy } from './policy.ts';
@@ -89,11 +89,11 @@ export async function main(argv: string[]): Promise<void> {
 
   loadEnv();
   const cfg = loadConfig();
-  if (args.user) cfg.user = args.user;
+  if (args.user) setUser(cfg, args.user);
 
   switch (args.command) {
     case 'gateway':
-      return gatewayCommand(cfg);
+      return gatewayCommand(cfg, args.rest[0]);
     case 'doctor':
       return doctor(cfg, args);
     case 'keys':
@@ -141,7 +141,9 @@ async function prepareGateway(cfg: Config, args: Args, say: (s: string) => void)
   else if (local === 'no-ollama') say(c.yellow('  ! Ollama is not running, so there is no local model to fall back on (and confidential repos cannot be used).'));
   else if (local === 'no-base') say(c.yellow(`  ! Local model missing. Run: ollama pull ${cfg.localBase}`));
   if (args.noGateway) return;
-  const up = await ensureGateway(cfg, () => say(c.dim('  Starting the Bifrost gateway in the background (first run downloads it)…')));
+  const up = await ensureGateway(cfg, (why) =>
+    say(c.dim(why === 'starting' ? '  Starting the Bifrost gateway in the background (first run downloads it)…' : '  Keys, users or budgets changed: restarting the Bifrost gateway to apply them…')),
+  );
   if (!up) say(c.yellow('  ! Bifrost did not come up. Calls will use the local model directly until it does. Try: frugal gateway'));
 }
 
@@ -241,7 +243,15 @@ async function webCommand(cfg: Config, args: Args): Promise<void> {
 
 // ---- gateway ----
 
-async function gatewayCommand(cfg: Config): Promise<void> {
+async function gatewayCommand(cfg: Config, sub?: string): Promise<void> {
+  if (sub === 'stop' || sub === 'restart') {
+    const stopped = await stopGateway(cfg);
+    console.log(stopped ? 'Stopped the Bifrost gateway.' : 'No Bifrost gateway was running on that port.');
+    if (sub === 'stop') return;
+    const up = await ensureGateway(cfg, () => console.log('Starting Bifrost in the background…'));
+    console.log(up ? `Bifrost is running at ${cfg.gatewayUrl}.` : 'Bifrost did not come up. Run "frugal gateway" to see its logs.');
+    return;
+  }
   if (await gatewayHealthy(cfg)) {
     console.log(`Bifrost is already running at ${cfg.gatewayUrl}. Stop that one first to apply config changes.`);
     return;
@@ -411,7 +421,7 @@ function budgetCommand(cfg: Config, rest: string[], forUser: boolean): void {
       cfg.budget = { limitUsd: limit, period };
       updateStoredConfig({ budget: cfg.budget });
     }
-    console.log('Saved. Restart the gateway (frugal gateway) so Bifrost enforces the same limit.');
+    console.log('Saved. The gateway picks this up the next time frugal starts.');
   }
   const b = new Budget(cfg).status();
   console.log(`${b.user}: spent ${fmtUsd(b.spentUsd)} of ${fmtUsd(b.limitUsd)} this ${b.period}`);

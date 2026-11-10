@@ -29,7 +29,10 @@ export interface Config {
   localContextTokens: number;
   /** Keyed by model-name prefix; the longest matching prefix wins. */
   prices: Record<string, ModelPrice>;
+  /** The current user's gateway keys (an entry of `userKeys`). */
   virtualKeys: { cloud: string; local: string };
+  /** Bifrost virtual keys per user: one that may reach cloud providers, one that may reach only Ollama. */
+  userKeys: Record<string, { cloud: string; local: string }>;
   maxOutputTokens: number;
   /** Conversation size at which old tool output is compacted. */
   contextBudgetTokens: number;
@@ -79,7 +82,8 @@ function defaults(): Config {
       'openrouter/': { in: 0.3, out: 1.2 },
       '': { in: 0.5, out: 1.5 },
     },
-    virtualKeys: { cloud: newVirtualKey(), local: newVirtualKey() },
+    virtualKeys: { cloud: '', local: '' },
+    userKeys: {},
     maxOutputTokens: 2048,
     contextBudgetTokens: 12000,
   };
@@ -115,12 +119,26 @@ export function loadConfig(): Config {
     budget: { ...base.budget, ...stored.budget },
     models: { ...base.models, ...stored.models },
     prices: { ...base.prices, ...stored.prices },
-    virtualKeys: { ...base.virtualKeys, ...stored.virtualKeys },
+    userKeys: { ...stored.userKeys },
   };
-  // First run: persist the generated virtual keys so they stay stable. Nothing else is written,
-  // so later changes to the built-in defaults still reach existing installs.
-  if (!stored.virtualKeys) updateStoredConfig({ virtualKeys: cfg.virtualKeys });
+  // Installs from before per-user keys kept a single pair: it belongs to the machine's user.
+  if (stored.virtualKeys && !cfg.userKeys[base.user]) cfg.userKeys[base.user] = stored.virtualKeys;
+  setUser(cfg, cfg.user);
   return cfg;
+}
+
+/**
+ * Switch the config to a user, creating their gateway keys on first sight. Each user gets their
+ * own pair of Bifrost virtual keys, so the gateway tracks and limits each person separately.
+ * Only the keys are written to disk; everything else stays with the built-in defaults.
+ */
+export function setUser(cfg: Config, user: string): void {
+  cfg.user = user;
+  if (!cfg.userKeys[user]) {
+    cfg.userKeys[user] = { cloud: newVirtualKey(), local: newVirtualKey() };
+    updateStoredConfig({ userKeys: { ...readJson<Partial<Config>>(CONFIG_FILE, {}).userKeys, ...cfg.userKeys } });
+  }
+  cfg.virtualKeys = cfg.userKeys[user]!;
 }
 
 /** Persist only the given settings, leaving everything else to the defaults. */
