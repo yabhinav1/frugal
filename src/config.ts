@@ -48,6 +48,7 @@ export const PROVIDER_KEY_ENV: Record<string, string> = {
   gemini: 'GEMINI_API_KEY',
   cerebras: 'CEREBRAS_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  nvidia: 'NVIDIA_API_KEY',
 };
 
 const newVirtualKey = () => `sk-bf-${crypto.randomBytes(18).toString('hex')}`;
@@ -63,8 +64,9 @@ function defaults(): Config {
       // Checked against the live gateway on 2026-11-10: each of these answered with a valid tool call.
       // Gemini leads both chains: Groq's free tier refuses any single request over 8,000 tokens,
       // which a coding session passes within a few steps, so Groq serves as the fallback.
-      fast: ['gemini/gemini-3.5-flash-lite', 'groq/openai/gpt-oss-20b', 'groq/qwen/qwen3.8-27b'],
-      strong: ['gemini/gemini-3.5-flash', 'groq/openai/gpt-oss-120b', 'gemini/gemini-3.8-flash'],
+      // Three independent providers before the local model: Google, Groq, then NVIDIA's hosted API.
+      fast: ['gemini/gemini-3.5-flash-lite', 'groq/openai/gpt-oss-20b', 'nvidia/nvidia/nemotron-3.5-lightning-30b-a3b'],
+      strong: ['gemini/gemini-3.5-flash', 'groq/openai/gpt-oss-120b'],
       local: `ollama/${localVariantOf('qwen2.5-coder:3b')}`,
     },
     localBase: 'qwen2.5-coder:3b',
@@ -80,6 +82,7 @@ function defaults(): Config {
       'gemini/': { in: 0.3, out: 2.5 },
       'gemini/gemini-3.5-flash-lite': { in: 0.1, out: 0.4 },
       'openrouter/': { in: 0.3, out: 1.2 },
+      'nvidia/': { in: 0.2, out: 0.6 },
       '': { in: 0.5, out: 1.5 },
     },
     virtualKeys: { cloud: '', local: '' },

@@ -8,6 +8,9 @@ import { readJson, writeJsonAtomic } from '../util.ts';
 
 export const BIFROST_DIR = process.env.FRUGAL_BIFROST_DIR || path.join(HOME, 'bifrost');
 
+/** OpenAI-compatible providers that are not built into Bifrost, with their base URLs. */
+const CUSTOM: Record<string, string> = { nvidia: 'https://integrate.api.nvidia.com' };
+
 const RESET: Record<Config['budget']['period'], string> = { day: '1d', month: '1M' };
 
 /**
@@ -39,7 +42,9 @@ export function buildBifrostConfig(cfg: Config): Record<string, unknown> {
       })),
       // With one key, retrying a rate-limited provider is pointless: the next model in the chain
       // answers sooner. With a pool, a retry draws another key, so a few quick retries are worth it.
-      network_config: { max_retries: Math.min(3, envs.length - 1), retry_backoff_initial: 200, retry_backoff_max: 1000, default_request_timeout_in_seconds: 60 },
+      network_config: { max_retries: Math.min(3, envs.length - 1), retry_backoff_initial: 200, retry_backoff_max: 1000, default_request_timeout_in_seconds: 60, ...(CUSTOM[name] ? { base_url: CUSTOM[name] } : {}) },
+      // Providers Bifrost has no built-in support for are declared as OpenAI-compatible endpoints.
+      ...(CUSTOM[name] ? { custom_provider_config: { base_provider_type: 'openai', allowed_requests: { chat_completion: true, chat_completion_stream: true } } } : {}),
     };
   }
   providers.ollama = {
@@ -109,21 +114,26 @@ function configHash(cfg: Config): string {
   return crypto.createHash('sha256').update(JSON.stringify(buildBifrostConfig(cfg))).update(keys.join('\n')).digest('hex').slice(0, 16);
 }
 
-/** The process listening on the gateway's port, if it is a Bifrost process. */
-function gatewayPid(cfg: Config): number | null {
+/**
+ * The Bifrost process serving the gateway port, found in the process list by its name and the
+ * port on its command line. (Socket listings are not used: on some Windows builds netstat
+ * intermittently omits a listening socket.) Only a process named bifrost is ever returned.
+ */
+export function gatewayPid(cfg: Config): number | null {
   const port = Number(new URL(cfg.gatewayUrl).port) || 8080;
-  if (process.platform === 'win32') {
-    const net = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true }).stdout ?? '';
-    const line = net.split(/\r?\n/).find((l) => /LISTENING/.test(l) && new RegExp(`:${port}\\s`).test(l));
-    const pid = Number(line?.trim().split(/\s+/).pop());
-    if (!pid) return null;
-    const name = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true }).stdout ?? '';
-    return /bifrost/i.test(name) ? pid : null;
-  }
-  const pid = Number((spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout ?? '').trim().split('\n')[0]);
-  if (!pid) return null;
-  const name = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' }).stdout ?? '';
-  return /bifrost/i.test(name) ? pid : null;
+  // One "pid<TAB>command line" row per Bifrost process.
+  const listing =
+    process.platform === 'win32'
+      ? spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'bifrost*' } | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"], { encoding: 'utf8', windowsHide: true }).stdout
+      : spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout;
+  const rows = (listing ?? '')
+    .split(/\r?\n/)
+    .map((l) => /^\s*(\d+)\s+(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => !!m && /bifrost/i.test(m[2]!) && !/powershell|ps -eo/i.test(m[2]!))
+    .map((m) => ({ pid: Number(m[1]), command: m[2]! }));
+  // Prefer the one started on our port; a lone Bifrost with no port shown is ours by default.
+  const onPort = rows.find((r) => new RegExp(`-port[ =]${port}\\b`).test(r.command));
+  return (onPort ?? (rows.length === 1 && !/-port[ =]\d+/.test(rows[0]!.command) ? rows[0] : undefined))?.pid ?? null;
 }
 
 /** Stop the Bifrost process on the gateway port. Anything else on that port is left alone. */

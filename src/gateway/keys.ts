@@ -22,6 +22,7 @@ const PROBES: Record<string, (key: string) => Promise<Response>> = {
       body: JSON.stringify({ model: 'gpt-oss-120b', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
       signal: AbortSignal.timeout(15_000),
     }),
+  nvidia: (key) => fetch('https://integrate.api.nvidia.com/v1/models', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15_000) }),
   openrouter: (key) => fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15_000) }),
 };
 

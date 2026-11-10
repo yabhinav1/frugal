@@ -23,12 +23,16 @@ const flag = (name: string, fallback: string) => {
 const realHome = process.env.FRUGAL_HOME || path.join(os.homedir(), '.frugal');
 const benchHome = path.join(BENCH, 'home');
 fs.mkdirSync(benchHome, { recursive: true });
-const realConfig = JSON.parse(fs.readFileSync(path.join(realHome, 'config.json'), 'utf8')) as { virtualKeys: unknown };
-fs.writeFileSync(path.join(benchHome, 'config.json'), JSON.stringify({ virtualKeys: realConfig.virtualKeys }));
+// The benchmark spends as its own user, "bench", with its own gateway key and budget, so a long
+// run cannot use up a real person's daily limit. Create it once with:
+//   frugal budget set 10 day --user bench   (then: frugal gateway restart)
+const realConfig = JSON.parse(fs.readFileSync(path.join(realHome, 'config.json'), 'utf8')) as { userKeys?: Record<string, unknown> };
+if (!realConfig.userKeys?.bench) throw new Error('No gateway key for the benchmark user yet. Run: frugal budget set 10 day --user bench   then: frugal gateway restart');
+fs.writeFileSync(path.join(benchHome, 'config.json'), JSON.stringify({ userKeys: { bench: realConfig.userKeys.bench } }));
 process.env.FRUGAL_HOME = benchHome;
 process.env.FRUGAL_BIFROST_DIR = path.join(realHome, 'bifrost');
 
-const { loadConfig, loadEnv, isLocalModel } = await import('../src/config.ts');
+const { loadConfig, loadEnv, isLocalModel, setUser } = await import('../src/config.ts');
 const { Agent } = await import('../src/agent.ts');
 const { resolvePolicy } = await import('../src/policy.ts');
 const { newSession } = await import('../src/session.ts');
@@ -70,7 +74,7 @@ interface Result {
 loadEnv();
 const cfg = loadConfig();
 const model = flag('model', cfg.models.fast[0]!);
-cfg.user = 'bench';
+setUser(cfg, 'bench');
 cfg.userBudgets.bench = { limitUsd: 10, period: 'day' };
 // The model is listed three times so that a one-off provider error (some models occasionally
 // emit a malformed tool call, which the provider rejects) retries the same model instead of
