@@ -1,0 +1,50 @@
+[
+  {
+    "id": "s1-git-detection",
+    "kind": "regression",
+    "prompt": "Since a recent refactor, commands like `cd src && git commit -am x` are no longer treated as git operations, only commands that start with git. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/approval.ts", "find": "/(^|[\\s;&|(`$])git(\\.exe)?(\\s|$)/i", "replace": "/^git(\\.exe)?(\\s|$)/i" }
+  },
+  {
+    "id": "s2-budget-check",
+    "kind": "regression",
+    "prompt": "The spending check lets a model call through even when that call would take the user past their limit. It should refuse before the call. Find and fix it, then run the tests.",
+    "mutation": { "file": "src/budget.ts", "find": "if (status.spentUsd + estimateUsd > status.limitUsd)", "replace": "if (status.spentUsd > status.limitUsd)" }
+  },
+  {
+    "id": "s3-path-escape",
+    "kind": "regression",
+    "prompt": "Paths containing ../ are getting out of the repository again: the agent can read and write files outside it. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/policy.ts", "find": "if (rel.startsWith('..') || path.isAbsolute(rel)) {", "replace": "if (path.isAbsolute(rel)) {" }
+  },
+  {
+    "id": "s4-indent-match",
+    "kind": "regression",
+    "prompt": "Edits now fail with 'old text not found' when the model's indentation differs from the file's. That case used to work. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/tools.ts", "find": "for (const norm of [(l: string) => l.trimEnd(), (l: string) => l.trim()]) {", "replace": "for (const norm of [(l: string) => l.trimEnd()]) {" }
+  },
+  {
+    "id": "s5-stack-frames",
+    "kind": "regression",
+    "prompt": "The trimmed test output we hand to the model contains Node-internal stack frames again, which wastes tokens. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/tools.ts", "find": "if (/node:|node_modules|\\(internal\\//.test(line) || ++frames > 3) continue;", "replace": "if (++frames > 3) continue;" }
+  },
+  {
+    "id": "s6-failover-count",
+    "kind": "regression",
+    "prompt": "The failover counter in the session statistics always stays at zero, even when another model takes over. Find and fix it, then run the tests.",
+    "mutation": { "file": "src/gateway/router.ts", "find": "if (failedOver) s.failovers++;", "replace": "" }
+  },
+  {
+    "id": "s7-cloud-answer",
+    "kind": "regression",
+    "prompt": "In a confidential session, an answer that came from a cloud model is being accepted instead of discarded. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/gateway/router.ts", "find": "if (this.localOnly && !isLocalModel(served)) {", "replace": "if (false) {" }
+  },
+  {
+    "id": "s8-crlf-edit",
+    "kind": "regression",
+    "prompt": "After an edit, files that used Windows (CRLF) line endings are saved with Unix endings. They should keep their own line endings. Find and fix the regression, then run the tests.",
+    "mutation": { "file": "src/tools.ts", "find": "fs.writeFileSync(abs, crlf ? after.replace(/\\n/g, '\\r\\n') : after);", "replace": "fs.writeFileSync(abs, after);" }
+  }
+]

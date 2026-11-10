@@ -178,6 +178,9 @@ export interface ToolBoxOptions {
   webEnabled: boolean;
   /** Benchmark baseline: token-saving behaviour off. Approvals and path rules are unaffected. */
   naive?: boolean;
+  /** Ablation switches (default on): the re-read pointer, and trimming of command output. */
+  dedupe?: boolean;
+  condense?: boolean;
 }
 
 export class ToolBox {
@@ -303,7 +306,7 @@ export class ToolBox {
     // The pointer is given once. A model that asks again for the same lines really does need
     // them (it may have lost track of the earlier copy), and refusing twice only wastes a step.
     const askKey = `${rel}:${hash}:${start}-${end}`;
-    if (prior && !this.pointed.has(askKey)) {
+    if (prior && this.o.dedupe !== false && !this.pointed.has(askKey)) {
       this.pointed.add(askKey);
       this.o.stats.tokensSaved += estimateTokens(body);
       return { ok: true, content: `[${rel} lines ${start}-${end} are unchanged and already shown above (from your read of ${prior.start}-${prior.end}). Not repeated.]` };
@@ -425,7 +428,7 @@ export class ToolBox {
     const result = await runCommand(this.shell, cmd, this.o.policy.root, timeoutMs, signal);
     const ok = !result.timedOut && result.code === 0;
     const rawOut = result.output.trim();
-    const condensed = this.o.naive ? rawOut : condenseOutput(rawOut, ok);
+    const condensed = this.o.naive || this.o.condense === false ? rawOut : condenseOutput(rawOut, ok);
     const { text, dropped } = truncateMiddle(condensed, this.o.naive ? 100_000 : CMD_MAX_CHARS);
     const removed = rawOut.length - condensed.length + dropped;
     if (removed > 0) this.o.stats.tokensSaved += Math.ceil(removed / 3.5);

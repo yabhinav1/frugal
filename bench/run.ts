@@ -36,11 +36,14 @@ const { ensureGateway } = await import('../src/gateway/bifrost.ts');
 type AgentEvent = import('../src/types.ts').AgentEvent;
 type Frontend = import('../src/types.ts').Frontend;
 type Stats = import('../src/types.ts').Stats;
+type Saver = import('../src/agent.ts').Saver;
 
 interface Task {
   id: string;
   kind: string;
   prompt: string;
+  /** "self" suite: the one-line regression to plant in the copy of the source. */
+  mutation?: { file: string; find: string; replace: string };
 }
 interface Result {
   task: string;
@@ -76,18 +79,46 @@ cfg.models.fast = [model, model, model];
 const delayMs = Number(flag('delay', '5')) * 1000;
 const variants = flag('variants', 'frugal,naive').split(',');
 const only = flag('tasks', '');
-const tasks = (JSON.parse(fs.readFileSync(path.join(ROOT, 'bench/tasks/tasks.json'), 'utf8')) as Task[]).filter((t) => !only || only.split(',').some((p) => t.id.startsWith(p)));
-const resultsFile = path.join(BENCH, `results-${model.replace(/[^\w.-]+/g, '_')}.json`);
+// Two suites. "shop": features and bugs in a small 10-file project, where each task names its
+// failing test. "self": regressions planted in this agent's own source (about 4,500 lines),
+// described the way a user would report them, with no file named, so the agent has to find it.
+const suite = flag('suite', 'shop');
+const tasksFile = suite === 'self' ? 'bench/self/tasks.json' : 'bench/tasks/tasks.json';
+const tasks = (JSON.parse(fs.readFileSync(path.join(ROOT, tasksFile), 'utf8')) as Task[]).filter((t) => !only || only.split(',').some((p) => t.id.startsWith(p)));
+const slug = `${suite === 'shop' ? '' : `${suite}-`}${model.replace(/[^\w.-]+/g, '_')}`;
+const resultsFile = path.join(BENCH, `results-${slug}.json`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const sha = (file: string) => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+
+/** Content of every file under test/, to detect and undo an agent that edits the tests. */
+function snapshotTests(dir: string): Map<string, Buffer> {
+  const snap = new Map<string, Buffer>();
+  for (const entry of fs.readdirSync(path.join(dir, 'test'), { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const file = path.join(entry.parentPath, entry.name);
+      snap.set(file, fs.readFileSync(file));
+    }
+  }
+  return snap;
+}
 
 function prepare(task: Task, variant: string): string {
   // One folder per model as well, so two benchmark runs can never share a working copy.
-  const dir = path.join(BENCH, 'work', model.replace(/[^\w.-]+/g, '_'), variant, task.id);
+  const dir = path.join(BENCH, 'work', slug, variant, task.id);
   fs.rmSync(dir, { recursive: true, force: true });
-  fs.cpSync(path.join(ROOT, 'bench/fixture'), dir, { recursive: true });
-  fs.copyFileSync(path.join(ROOT, 'bench/tasks', `${task.id}.test.js`), path.join(dir, 'test', `${task.id}.test.js`));
+  if (suite === 'self') {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const item of ['src', 'test', 'package.json', 'tsconfig.json', 'README.md']) fs.cpSync(path.join(ROOT, item), path.join(dir, item), { recursive: true });
+    // Plant the regression. The exact text must be present, or the task definition is stale.
+    const m = task.mutation!;
+    const file = path.join(dir, m.file);
+    const source = fs.readFileSync(file, 'utf8');
+    if (!source.includes(m.find)) throw new Error(`Task ${task.id}: the text to mutate was not found in ${m.file}. Update bench/self/tasks.json.`);
+    fs.writeFileSync(file, source.replace(m.find, m.replace));
+  } else {
+    fs.cpSync(path.join(ROOT, 'bench/fixture'), dir, { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'bench/tasks', `${task.id}.test.js`), path.join(dir, 'test', `${task.id}.test.js`));
+  }
   spawnSync('git', ['init', '-q'], { cwd: dir });
   spawnSync('git', ['add', '-A'], { cwd: dir });
   spawnSync('git', ['-c', 'user.name=bench', '-c', 'user.email=bench@example.com', 'commit', '-q', '-m', 'fixture'], { cwd: dir });
@@ -96,9 +127,7 @@ function prepare(task: Task, variant: string): string {
 
 async function runOnce(task: Task, variant: string): Promise<Omit<Result, 'attempts' | 'run'>> {
   const dir = prepare(task, variant);
-  const testFile = path.join(dir, 'test', `${task.id}.test.js`);
-  const original = fs.readFileSync(testFile);
-  const before = sha(testFile);
+  const tests = snapshotTests(dir);
 
   let end = 'unknown';
   // Stands in for a person who approves ordinary edits and commands, and refuses git and anything risky.
@@ -112,7 +141,7 @@ async function runOnce(task: Task, variant: string): Promise<Omit<Result, 'attem
   const session = newSession(dir);
   // Benchmarking the local model means benchmarking confidential mode, exactly as a user gets it.
   const policy = resolvePolicy(dir, { forceConfidential: isLocalModel(model) });
-  const agent = new Agent({ cfg, policy, session, frontend, pre: { writes: false, commands: [] }, forceTier: isLocalModel(model) ? 'local' : 'fast', naive: variant === 'naive' });
+  const agent = new Agent({ cfg, policy, session, frontend, pre: { writes: false, commands: [] }, forceTier: isLocalModel(model) ? 'local' : 'fast', naive: variant === 'naive', off: variant.startsWith('no-') ? [variant.slice(3) as Saver] : [] });
 
   // Hold every call to the one model under test: wait out provider overloads, never substitute.
   agent.router.pinned = true;
@@ -123,9 +152,15 @@ async function runOnce(task: Task, variant: string): Promise<Omit<Result, 'attem
   clearTimeout(timer);
 
   // An agent that edits the test to make it pass has not solved the task.
-  const testTampered = !fs.existsSync(testFile) || sha(testFile) !== before;
-  if (testTampered) fs.writeFileSync(testFile, original);
-  const check = spawnSync(process.execPath, ['--test'], { cwd: dir, timeout: 120_000 });
+  // The original tests are put back before checking, whatever the agent did to them.
+  let testTampered = false;
+  for (const [file, original] of tests) {
+    if (!fs.existsSync(file) || !fs.readFileSync(file).equals(original)) {
+      testTampered = true;
+      fs.writeFileSync(file, original);
+    }
+  }
+  const check = spawnSync(process.execPath, suite === 'self' ? ['--test', 'test/**/*.test.ts'] : ['--test'], { cwd: dir, timeout: 180_000 });
 
   const s: Stats = session.stats;
   return {
@@ -145,6 +180,17 @@ async function runOnce(task: Task, variant: string): Promise<Omit<Result, 'attem
     mixedModels: Object.keys(s.byModel).some((m) => m !== model),
     testTampered,
   };
+}
+
+// --verify: no model. Confirms every task starts from a failing test suite, so a pass means something.
+if (process.argv.includes('--verify')) {
+  for (const task of tasks) {
+    const dir = prepare(task, 'verify');
+    const check = spawnSync(process.execPath, suite === 'self' ? ['--test', 'test/**/*.test.ts'] : ['--test'], { cwd: dir, timeout: 180_000, encoding: 'utf8' });
+    const failing = /^ℹ fail (\d+)/m.exec(check.stdout ?? '')?.[1] ?? '?';
+    console.log(`${check.status === 0 ? 'BROKEN TASK (tests already pass)' : 'ok, starts failing'}  ${task.id}  failing tests: ${failing}`);
+  }
+  process.exit(0);
 }
 
 if (!(await ensureGateway(cfg))) throw new Error('Bifrost gateway is not running.');
@@ -183,7 +229,7 @@ const total = (r: Result) => r.tokensIn + r.tokensOut;
 // Every figure is over all runs of a task: "3/3" solved, tokens and calls as the mean per run.
 const mean = (rs: Result[], f: (r: Result) => number) => (rs.length ? Math.round(sum(rs, f) / rs.length) : 0);
 const of = (id: string, v: string) => results.filter((r) => r.task === id && r.variant === v);
-const lines: string[] = [`## ${model}`, '', '| Task | Kind | frugal solved | mean tokens | mean calls | naive solved | mean tokens | mean calls | Tokens saved |', '|---|---|---|---:|---:|---|---:|---:|---:|'];
+const lines: string[] = [`## ${model} · ${suite} suite`, '', '| Task | Kind | frugal solved | mean tokens | mean calls | naive solved | mean tokens | mean calls | Tokens saved |', '|---|---|---|---:|---:|---|---:|---:|---:|'];
 const ids = [...new Set(results.map((r) => r.task))].sort();
 for (const id of ids) {
   const f = of(id, 'frugal');
@@ -193,7 +239,7 @@ for (const id of ids) {
   lines.push(`| ${id} | ${(f[0] ?? n[0])!.kind} | ${cell(f)} | ${cell(n)} | ${saving} |`);
 }
 lines.push('');
-for (const v of ['frugal', 'naive']) {
+for (const v of [...new Set(results.map((r) => r.variant))]) {
   const rs = results.filter((r) => r.variant === v);
   if (!rs.length) continue;
   const solved = rs.filter((r) => r.solved);
@@ -207,5 +253,5 @@ if (fAll.length && nAll.length) {
   lines.push(`- **Overall**: frugal used ${Math.round((1 - mean(fAll, total) / mean(nAll, total)) * 100)}% fewer tokens per run than naive (${mean(fAll, total)} against ${mean(nAll, total)}).`);
 }
 const report = lines.join('\n');
-fs.writeFileSync(path.join(BENCH, `report-${model.replace(/[^\w.-]+/g, '_')}.md`), report);
+fs.writeFileSync(path.join(BENCH, `report-${slug}.md`), report);
 console.log(`\n${report}\n\nRaw results: ${resultsFile}`);
