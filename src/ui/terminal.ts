@@ -18,6 +18,8 @@ export class TerminalUI implements Frontend {
   /** Resolves when the current turn ends. */
   private turnDone: (() => void) | null = null;
   private closed = false;
+  /** Tool calls in flight that are shell or git commands, whose output is worth showing. */
+  private commands = new Set<string>();
   private pendingAnswer: ((answer: string) => void) | null = null;
   exitCode = 0;
 
@@ -66,10 +68,16 @@ export class TerminalUI implements Frontend {
         const mark = e.category === 'read' ? c.dim('●') : e.category === 'write' ? c.green('●') : c.magenta('●');
         this.print(`  ${mark} ${c.dim(e.summary)}`);
         this.label = e.summary.slice(0, 60);
+        if (e.category === 'shell' || e.category === 'git') this.commands.add(e.id);
         break;
       }
       case 'tool_end':
-        if (!e.ok) this.print(`    ${c.red('✗')} ${c.dim(e.preview.split('\n')[0] ?? '')}`);
+        if (this.commands.delete(e.id) && !/^The user denied/.test(e.preview)) {
+          // Show what the command printed: the first lines, with the exit status.
+          const lines = e.preview.split('\n').filter((l) => l.trim());
+          for (const line of lines.slice(0, 12)) this.print(`    ${e.ok ? c.dim(line) : c.red(line)}`);
+          if (lines.length > 12) this.print(c.dim(`    … ${lines.length - 12} more lines`));
+        } else if (!e.ok) this.print(`    ${c.red('✗')} ${c.dim(e.preview.split('\n')[0] ?? '')}`);
         this.label = 'thinking';
         break;
       case 'approval_result':

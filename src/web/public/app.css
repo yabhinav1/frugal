@@ -142,6 +142,20 @@ aside {
 .tool.failed { color: var(--bad); }
 .tool .tag { font-size: 11px; color: var(--muted); }
 
+pre.output {
+  margin: -6px 0 0 17px;
+  padding: 8px 12px;
+  background: var(--code-bg);
+  border-radius: 6px;
+  font: 12.5px/1.5 var(--mono);
+  color: var(--muted);
+  overflow: auto;
+  max-height: 260px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre.output.failed { color: var(--bad); }
+
 .notice {
   font-size: 13px;
   color: var(--muted);

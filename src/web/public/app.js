@@ -241,8 +241,13 @@ function handle(e) {
     }
     case 'tool_end': {
       const row = toolEls.get(e.id);
-      if (row && !e.ok) {
-        row.classList.add('failed');
+      const isCommand = row && (row.classList.contains('shell') || row.classList.contains('git'));
+      if (row && !e.ok) row.classList.add('failed');
+      if (isCommand && !/^The user denied/.test(e.preview)) {
+        // What the command printed, shown right under it.
+        const out = el('pre', `output${e.ok ? '' : ' failed'}`, e.preview);
+        row.after(out);
+      } else if (row && !e.ok) {
         row.appendChild(el('span', 'tag', e.preview.split('\n')[0].slice(0, 120)));
       }
       setWorking('Working');

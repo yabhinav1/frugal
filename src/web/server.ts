@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ATTACHED_MARK, Agent } from '../agent.ts';
 import type { PreApprovals } from '../approval.ts';
-import type { Config } from '../config.ts';
+import { HOME, type Config } from '../config.ts';
 import type { Policy } from '../policy.ts';
 import type { Session } from '../session.ts';
 import { ToolBox } from '../tools.ts';
@@ -54,6 +54,25 @@ class WebFrontend implements Frontend {
   }
 }
 
+/**
+ * The access token for the local web UI. It is created once and kept in the user's home
+ * directory (outside any repo), so a browser that has signed in stays signed in when the server
+ * restarts. Delete the file to revoke every existing sign-in.
+ */
+function webToken(): string {
+  const file = path.join(HOME, 'web-token');
+  try {
+    const saved = fs.readFileSync(file, 'utf8').trim();
+    if (/^[a-f0-9]{48}$/.test(saved)) return saved;
+  } catch {
+    /* first run */
+  }
+  const fresh = crypto.randomBytes(24).toString('hex');
+  fs.mkdirSync(HOME, { recursive: true });
+  fs.writeFileSync(file, fresh, { mode: 0o600 });
+  return fresh;
+}
+
 export interface WebOptions {
   cfg: Config;
   policy: Policy;
@@ -64,7 +83,7 @@ export interface WebOptions {
 }
 
 export async function startWebServer(o: WebOptions): Promise<{ url: string; close: () => void }> {
-  const token = crypto.randomBytes(24).toString('hex');
+  const token = webToken();
   const frontend = new WebFrontend();
   const agent = new Agent({ cfg: o.cfg, policy: o.policy, session: o.session, frontend, pre: o.pre, forceTier: o.forceTier });
   const allowedHosts = new Set([`127.0.0.1:${o.port}`, `localhost:${o.port}`]);

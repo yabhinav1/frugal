@@ -227,7 +227,7 @@ async function webCommand(cfg: Config, args: Args): Promise<void> {
   const { url } = await startWebServer({ cfg, policy, session, port: args.port ?? 4317, pre: { writes: args.yesWrites, commands: args.allowCmd }, forceTier: args.tier });
   console.log(`${c.bold('frugal web')} ${c.dim(`· ${path.basename(policy.root)} · session ${session.id}`)}`);
   console.log(`  Open ${c.cyan(url)}`);
-  console.log(c.dim('  The link carries a one-time access token and only works from this computer. Ctrl+C stops the server.'));
+  console.log(c.dim('  The link carries your access token and only works from this computer. Once signed in, plain http://127.0.0.1:' + (args.port ?? 4317) + ' works too. Ctrl+C stops the server.'));
 }
 
 // ---- gateway ----
