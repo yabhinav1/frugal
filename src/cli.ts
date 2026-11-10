@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { Agent } from './agent.ts';
 import type { PreApprovals } from './approval.ts';
@@ -20,6 +21,7 @@ Usage
   frugal "fix the failing test"  run one task and exit
   frugal web [--port 4317]     open the same agent in your browser
   frugal gateway               run the Bifrost gateway in this terminal
+  frugal init                  first-time setup: create the key file and show next steps
   frugal doctor                check gateway, models, keys and policy
   frugal keys                  test every API key and drop dead ones from the pools
   frugal sessions              list saved sessions for this repository
@@ -53,7 +55,7 @@ interface Args {
   help: boolean;
 }
 
-const COMMANDS = new Set(['web', 'gateway', 'doctor', 'keys', 'sessions', 'budget', 'repo', 'run', 'help']);
+const COMMANDS = new Set(['web', 'gateway', 'doctor', 'keys', 'init', 'sessions', 'budget', 'repo', 'run', 'help']);
 
 function parseArgs(argv: string[]): Args {
   const a: Args = { command: '', rest: [], continue: false, confidential: false, yesWrites: false, allowCmd: [], json: false, noGateway: false, help: false };
@@ -93,6 +95,8 @@ export async function main(argv: string[]): Promise<void> {
       return doctor(cfg, args);
     case 'keys':
       return keysCommand();
+    case 'init':
+      return initCommand();
     case 'sessions':
       return sessionsCommand();
     case 'budget':
@@ -304,6 +308,33 @@ async function doctor(cfg: Config, args: Args): Promise<void> {
   }
   const noKey = await ping('', cfg.models.local);
   ok(noKey.status === 401, `requests without a virtual key are rejected (HTTP ${noKey.status})`);
+}
+
+// ---- init ----
+
+/** First-run setup: create the key file in the user's home and say what to put in it. */
+function initCommand(): void {
+  const file = path.join(HOME, '.env');
+  if (!fs.existsSync(file)) {
+    fs.mkdirSync(HOME, { recursive: true });
+    fs.writeFileSync(
+      file,
+      [
+        '# API keys for frugal. This file stays on your machine.',
+        '# One free key from either provider is enough to start. Add more with a suffix (GROQ_API_KEY_2) to pool them.',
+        'GEMINI_API_KEY=',
+        'GROQ_API_KEY=',
+        '# Optional: web search',
+        'TAVILY_API_KEY=',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    console.log(`Created ${file}`);
+  } else console.log(`Key file already exists: ${file}`);
+  console.log('1. Put at least one key in it (free: https://aistudio.google.com/apikey or https://console.groq.com/keys).');
+  console.log('2. Optional, for confidential repos and offline fallback: install Ollama and run  ollama pull qwen2.5-coder:3b');
+  console.log('3. Run  frugal doctor  to check everything, then  frugal  inside any repository.');
 }
 
 // ---- keys ----
