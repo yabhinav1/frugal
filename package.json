@@ -1,0 +1,25 @@
+{
+  "name": "frugal",
+  "version": "0.1.0",
+  "description": "A coding agent that gets the job done on the fewest tokens. Terminal and web, behind a Bifrost gateway.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "frugal": "bin/frugal.mjs"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "web": "node src/cli.ts web",
+    "gateway": "node src/cli.ts gateway",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "bench": "node bench/run.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
