@@ -114,8 +114,11 @@ async function runOnce(task: Task, variant: string): Promise<Omit<Result, 'attem
   const policy = resolvePolicy(dir, { forceConfidential: isLocalModel(model) });
   const agent = new Agent({ cfg, policy, session, frontend, pre: { writes: false, commands: [] }, forceTier: isLocalModel(model) ? 'local' : 'fast', naive: variant === 'naive' });
 
+  // Hold every call to the one model under test: wait out provider overloads, never substitute.
+  agent.router.pinned = true;
+
   const started = Date.now();
-  const timer = setTimeout(() => agent.stop(), 8 * 60_000);
+  const timer = setTimeout(() => agent.stop(), 12 * 60_000);
   await agent.runTurn(task.prompt);
   clearTimeout(timer);
 

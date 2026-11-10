@@ -78,10 +78,17 @@ export class Router {
     this.userLocalOnly = value;
   }
 
+  /**
+   * Benchmark use only: never substitute another model. When the pinned model's provider is
+   * overloaded, wait and ask again, so a measurement is not polluted by a different model.
+   */
+  pinned = false;
+
   /** The models this session may use for a tier, in order of preference. */
   chain(tier: Tier): string[] {
     if (this.localOnly || tier === 'local') return [this.cfg.models.local];
     const cloud = usableChain(this.cfg.models[tier]);
+    if (this.pinned && cloud.length) return cloud;
     // The local model closes every chain: a total cloud outage degrades the session, not ends it.
     return [...cloud, this.cfg.models.local];
   }
@@ -120,11 +127,27 @@ export class Router {
       // Ollama directly is still inside the privacy policy, so that case is survivable too.
       const localRefused = (err.status === 403 || err.status === 404) && chain.every(isLocalModel);
       if (!err.retryable && !localRefused) throw err;
-      // Say it once per outage, not on every call.
-      if (!this.bypassing) this.frontend.emit({ type: 'notice', level: 'warn', text: `Gateway route failed (${err.message}). Continuing on the local model so the session is not lost.` });
-      this.bypassing = true;
-      raw = await this.directLocal(body, signal);
-      viaGateway = false;
+      if (this.pinned && !chain.every(isLocalModel)) {
+        // Pinned: outlast the outage instead of switching models. Up to about three minutes.
+        let answered: RawResponse | null = null;
+        for (let wait = 1; wait <= 9 && !answered; wait++) {
+          await sleep(20_000);
+          if (signal?.aborted) throw err;
+          try {
+            answered = await this.viaGateway(chain, body, signal);
+          } catch (again) {
+            if (!(again instanceof ModelError) || !again.retryable) throw again;
+          }
+        }
+        if (!answered) throw err;
+        raw = answered;
+      } else {
+        // Say it once per outage, not on every call.
+        if (!this.bypassing) this.frontend.emit({ type: 'notice', level: 'warn', text: `Gateway route failed (${err.message}). Continuing on the local model so the session is not lost.` });
+        this.bypassing = true;
+        raw = await this.directLocal(body, signal);
+        viaGateway = false;
+      }
     }
 
     const message = raw.choices?.[0]?.message;
