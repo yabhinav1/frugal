@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>frugal</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header>
+    <div class="brand">frugal</div>
+    <div class="where"><span id="repo"></span><span id="session" class="muted"></span></div>
+    <div id="mode" class="badge" hidden></div>
+    <div id="conn" class="muted">connecting…</div>
+  </header>
+
+  <main>
+    <section id="chat" aria-live="polite">
+      <div id="empty" class="empty">
+        <h1>What should we build?</h1>
+        <p>Describe a task in this repository. Reading is free. Every file change, shell command and git operation will stop and ask you first.</p>
+      </div>
+    </section>
+
+    <aside>
+      <div class="panel">
+        <h2>Budget</h2>
+        <div class="meter"><div id="meter-fill"></div></div>
+        <div class="row"><span id="budget-text">–</span><span id="budget-user" class="muted"></span></div>
+      </div>
+      <div class="panel">
+        <h2>This session</h2>
+        <dl>
+          <dt>Tokens in</dt><dd id="s-in">0</dd>
+          <dt>Tokens out</dt><dd id="s-out">0</dd>
+          <dt>Tokens saved</dt><dd id="s-saved" class="good">0</dd>
+          <dt>Model calls</dt><dd id="s-calls">0</dd>
+          <dt>Tool calls</dt><dd id="s-tools">0</dd>
+          <dt>Cost</dt><dd id="s-cost">$0</dd>
+        </dl>
+      </div>
+      <div class="panel">
+        <h2>Model</h2>
+        <div id="model" class="model">–</div>
+        <div id="chain" class="muted small"></div>
+        <ul id="switches" class="switches"></ul>
+      </div>
+      <div class="panel">
+        <h2>Rules in force</h2>
+        <ul class="rules">
+          <li>Reads run freely</li>
+          <li>Writes, shell and git ask first</li>
+          <li id="rule-privacy">Cloud models allowed</li>
+          <li>Spending is checked before each call</li>
+        </ul>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <form id="composer">
+      <textarea id="input" rows="1" placeholder="Describe a task…  (Enter to send, Shift+Enter for a new line)" autofocus></textarea>
+      <button id="send" type="submit">Send</button>
+      <button id="stop" type="button" hidden>Stop</button>
+    </form>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
