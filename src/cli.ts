@@ -1,4 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Agent } from './agent.ts';
 import type { PreApprovals } from './approval.ts';
@@ -24,6 +26,7 @@ Usage
   frugal init                  first-time setup: create the key file and show next steps
   frugal doctor                check gateway, models, keys and policy
   frugal keys                  test every API key and drop dead ones from the pools
+  frugal redteam               attack the approval, privacy and budget rules and report what held
   frugal sessions              list saved sessions for this repository
   frugal budget [set <usd>] [day|month]
   frugal repo status | mark | unmark    confidential mode for this repository
@@ -55,7 +58,7 @@ interface Args {
   help: boolean;
 }
 
-const COMMANDS = new Set(['web', 'gateway', 'doctor', 'keys', 'init', 'sessions', 'budget', 'repo', 'run', 'help']);
+const COMMANDS = new Set(['web', 'gateway', 'doctor', 'keys', 'init', 'redteam', 'sessions', 'budget', 'repo', 'run', 'help']);
 
 function parseArgs(argv: string[]): Args {
   const a: Args = { command: '', rest: [], continue: false, confidential: false, yesWrites: false, allowCmd: [], json: false, noGateway: false, help: false };
@@ -97,6 +100,8 @@ export async function main(argv: string[]): Promise<void> {
       return keysCommand();
     case 'init':
       return initCommand();
+    case 'redteam':
+      return redteamCommand();
     case 'sessions':
       return sessionsCommand();
     case 'budget':
@@ -308,6 +313,34 @@ async function doctor(cfg: Config, args: Args): Promise<void> {
   }
   const noKey = await ping('', cfg.models.local);
   ok(noKey.status === 401, `requests without a virtual key are rejected (HTTP ${noKey.status})`);
+}
+
+// ---- red team ----
+
+/**
+ * Attack the agent's own rules and report which held. Runs in a child process whose home is a
+ * scratch directory, so the attacks cannot touch the real ledger or confidential-repo registry.
+ */
+async function redteamCommand(): Promise<void> {
+  if (process.env.FRUGAL_REDTEAM_CHILD !== '1') {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'frugal-redteam-home-'));
+    const child = spawnSync(process.execPath, [process.argv[1]!, 'redteam'], { stdio: 'inherit', env: { ...process.env, FRUGAL_HOME: scratch, FRUGAL_REDTEAM_CHILD: '1' } });
+    fs.rmSync(scratch, { recursive: true, force: true });
+    process.exitCode = child.status ?? 1;
+    return;
+  }
+  const { runRedTeam } = await import('./redteam.ts');
+  console.log(c.bold('frugal redteam') + c.dim('  each attack is run against the real enforcement code; the model is played by a script, so no tokens are spent'));
+  const results = await runRedTeam();
+  let area = '';
+  for (const r of results) {
+    if (r.area !== area) console.log(`\n  ${c.bold((area = r.area))}`);
+    console.log(`    ${r.held ? c.green('BLOCKED') : c.red('BREACH ')}  ${r.attack}`);
+    console.log(c.dim(`             ${r.evidence}`));
+  }
+  const held = results.filter((r) => r.held).length;
+  console.log(`\n  ${held === results.length ? c.green(`${held} of ${results.length} attacks blocked`) : c.red(`${results.length - held} of ${results.length} attacks got through`)}`);
+  process.exit(held === results.length ? 0 : 1);
 }
 
 // ---- init ----
