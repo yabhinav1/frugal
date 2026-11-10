@@ -1,0 +1,9 @@
+{
+  "name": "shopkit",
+  "version": "1.4.0",
+  "description": "Small e-commerce toolkit: cart, pricing, inventory, orders and a JSON API.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

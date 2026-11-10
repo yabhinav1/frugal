@@ -1,0 +1,14 @@
+[
+  { "id": "01-discount", "kind": "bug", "prompt": "Customers with a SAVE10 coupon are getting a negative total. test/01-discount.test.js reproduces it. Find and fix the bug, then run the tests." },
+  { "id": "02-paginate", "kind": "bug", "prompt": "The first page of the product list is missing the first items. test/02-paginate.test.js fails. Fix it and run the tests." },
+  { "id": "03-csv-quotes", "kind": "feature", "prompt": "Our CSV import breaks on product names that contain commas. Make parseCsv handle quoted fields as described by test/03-csv-quotes.test.js, then run the tests." },
+  { "id": "04-low-stock", "kind": "feature", "prompt": "Add a lowStock(threshold) method to Inventory so the warehouse can see what is running out. test/04-low-stock.test.js specifies the behaviour. Run the tests when done." },
+  { "id": "05-cancel-shipped", "kind": "bug", "prompt": "Support reports that orders are being cancelled after they have shipped. That must not be possible. Also add a canCancel(order) helper. See test/05-cancel-shipped.test.js and run the tests." },
+  { "id": "06-product-route", "kind": "feature", "prompt": "Add a GET /products/:id endpoint to the JSON API. test/06-product-route.test.js describes the responses. Run the tests when done." },
+  { "id": "07-business-days", "kind": "bug", "prompt": "Delivery estimates are sometimes a day early around weekends. test/07-business-days.test.js fails. Fix the date logic and run the tests." },
+  { "id": "08-slugify", "kind": "bug", "prompt": "Product URLs come out with doubled and trailing dashes, and accented names break. Fix slugify so test/08-slugify.test.js passes, then run the tests." },
+  { "id": "09-rounding", "kind": "bug", "prompt": "Cart totals show values like 21.389300000000002. Tax and totals must be rounded to the cent. test/09-rounding.test.js covers it. Fix and run the tests." },
+  { "id": "10-email", "kind": "bug", "prompt": "Sign-up rejects valid emails such as ana+shop@example.com and addresses on subdomains. Fix validateEmail without accepting malformed addresses. test/10-email.test.js has the cases. Run the tests." },
+  { "id": "11-cart-inventory", "kind": "feature", "prompt": "Let a Cart take an optional Inventory as a second constructor argument. When present, adding, removing and changing quantities must reserve and release stock, and adding more than is available must fail. test/11-cart-inventory.test.js specifies it. Run the tests when done." },
+  { "id": "12-csv-export", "kind": "bug", "prompt": "Our CSV export produces broken files when a value contains a comma, a quote or a line break. Fix toCsv so test/12-csv-export.test.js passes, then run the tests." }
+]
