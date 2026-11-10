@@ -85,7 +85,7 @@ export interface WebOptions {
 export async function startWebServer(o: WebOptions): Promise<{ url: string; close: () => void }> {
   const token = webToken();
   const frontend = new WebFrontend();
-  const agent = new Agent({ cfg: o.cfg, policy: o.policy, session: o.session, frontend, pre: o.pre, forceTier: o.forceTier });
+  const agent = new Agent({ cfg: o.cfg, policy: o.policy, session: o.session, frontend, pre: o.pre, forceTier: o.forceTier, stream: true });
   const allowedHosts = new Set([`127.0.0.1:${o.port}`, `localhost:${o.port}`]);
 
   const json = (res: http.ServerResponse, status: number, body: unknown) => {

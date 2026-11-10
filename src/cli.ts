@@ -132,7 +132,7 @@ function pickSession(args: Args, policy: Policy): Session {
 
 function buildAgent(cfg: Config, args: Args, policy: Policy, session: Session, frontend: Frontend): Agent {
   const pre: PreApprovals = { writes: args.yesWrites, commands: args.allowCmd };
-  return new Agent({ cfg, policy, session, frontend, pre, forceTier: args.tier });
+  return new Agent({ cfg, policy, session, frontend, pre, forceTier: args.tier, stream: !args.json });
 }
 
 async function prepareGateway(cfg: Config, args: Args, say: (s: string) => void): Promise<void> {

@@ -7,6 +7,7 @@ const chat = $('chat');
 const input = $('input');
 let busy = false;
 let workingEl = null;
+let streamEl = null;
 const toolEls = new Map();
 
 const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -230,8 +231,21 @@ function budgetCard(status, estimateUsd) {
 
 function handle(e) {
   switch (e.type) {
+    case 'text_delta':
+      // The reply as it is being written: plain text now, formatted when complete.
+      if (!streamEl) streamEl = append(el('div', 'msg assistant streaming'));
+      streamEl.textContent += e.text;
+      if (chat.scrollHeight - chat.scrollTop - chat.clientHeight < 160) chat.scrollTop = chat.scrollHeight;
+      break;
+    case 'text_clear':
+      if (streamEl) streamEl.remove();
+      streamEl = null;
+      break;
     case 'text':
-      append(assistantMessage(e.text));
+      if (streamEl) {
+        streamEl.replaceWith(assistantMessage(e.text));
+        streamEl = null;
+      } else append(assistantMessage(e.text));
       break;
     case 'tool_start': {
       const row = append(el('div', `tool ${e.category}`, e.summary));

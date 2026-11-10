@@ -5,7 +5,7 @@ import { FakeFrontend, isolateHome, tempRepo } from './helpers.ts';
 
 isolateHome();
 process.env.GROQ_API_KEY = 'test-key'; // pretend one cloud provider is configured
-const { Router, emptyStats } = await import('../src/gateway/router.ts');
+const { Router, emptyStats, readStream } = await import('../src/gateway/router.ts');
 const { Budget, BudgetExceededError } = await import('../src/budget.ts');
 const { resolvePolicy } = await import('../src/policy.ts');
 const { loadConfig } = await import('../src/config.ts');
@@ -161,6 +161,39 @@ test('content returned as a list of parts is flattened to text', async () => {
   }));
   const out = await router.complete(msgs, [], 'fast');
   assert.equal(out.message.content, 'Fixed it.');
+});
+
+test('a streamed reply is assembled from fragments: text, a split tool call, usage and the answering model', async () => {
+  const sse = (chunks: object[]) => {
+    const text = `${chunks.map((c) => `data: ${JSON.stringify(c)}`).join('\n\n')}\n\ndata: [DONE]\n\n`;
+    // Deliver in awkward slices, so lines are cut mid-way as they are on a real connection.
+    const bytes = new TextEncoder().encode(text);
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 37) controller.enqueue(bytes.slice(i, i + 37));
+        controller.close();
+      },
+    });
+  };
+  const seen: string[] = [];
+  const raw = await readStream(
+    sse([
+      { choices: [{ delta: { role: 'assistant', content: '' } }], extra_fields: { routing_info: { provider: 'gemini', model: 'gemini-3.5-flash-lite' } } },
+      { choices: [{ delta: { content: 'Fixing ' } }] },
+      { choices: [{ delta: { content: 'the bug.' } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'edit', arguments: '{"path":"a.js",' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"old":"x","new":"y"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 120, completion_tokens: 30 }, model: 'gemini-3.5-flash-lite' },
+    ]),
+    (d) => seen.push(d),
+  );
+  assert.deepEqual(seen, ['Fixing ', 'the bug.']);
+  const message = raw.choices![0]!.message!;
+  assert.equal(message.content, 'Fixing the bug.');
+  assert.deepEqual(JSON.parse(message.tool_calls![0]!.function.arguments), { path: 'a.js', old: 'x', new: 'y' });
+  assert.equal(message.tool_calls![0]!.function.name, 'edit');
+  assert.equal(raw.usage!.prompt_tokens, 120);
+  assert.equal(raw.extra_fields!.routing_info!.provider, 'gemini');
 });
 
 test('a bad request is an error, not something to retry or reroute', async () => {

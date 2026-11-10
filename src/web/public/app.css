@@ -111,6 +111,7 @@ aside {
   border-radius: 14px 14px 4px 14px;
 }
 .msg.assistant { white-space: normal; }
+.msg.assistant.streaming { white-space: pre-wrap; }
 .msg.assistant p { margin: 0 0 8px; }
 .msg.assistant > :last-child { margin-bottom: 0; }
 .msg.assistant h3 { font-size: 15px; margin: 12px 0 6px; }

@@ -93,7 +93,11 @@ export class Router {
     return [...cloud, this.cfg.models.local];
   }
 
-  async complete(messages: Message[], tools: ToolSpec[], tier: Tier, signal?: AbortSignal): Promise<Completion> {
+  /**
+   * @param onText when given, the reply is streamed and each piece of text is passed here as it
+   *   arrives. The returned completion is the same either way.
+   */
+  async complete(messages: Message[], tools: ToolSpec[], tier: Tier, signal?: AbortSignal, onText?: (delta: string) => void): Promise<Completion> {
     const chain = this.chain(tier);
 
     // 1. Privacy. Checked here, in code, on the final candidate list.
@@ -114,7 +118,7 @@ export class Router {
     let raw: RawResponse;
     let viaGateway = true;
     try {
-      raw = await this.viaGateway(chain, body, signal);
+      raw = await this.viaGateway(chain, body, signal, onText);
       if (this.bypassing) {
         this.bypassing = false;
         this.frontend.emit({ type: 'notice', level: 'info', text: 'The gateway is answering again.' });
@@ -206,13 +210,13 @@ export class Router {
     return { message, model: served, truncated: raw.choices?.[0]?.finish_reason === 'length' };
   }
 
-  private async viaGateway(chain: string[], body: object, signal?: AbortSignal): Promise<RawResponse> {
+  private async viaGateway(chain: string[], body: object, signal?: AbortSignal, onText?: (delta: string) => void): Promise<RawResponse> {
     // A confidential session must not send code to a gateway on another machine either.
     if (this.localOnly && !isLoopbackUrl(this.cfg.gatewayUrl)) {
       throw new ModelError('gateway is remote and this session is local-only', 0, true);
     }
     const vk = this.localOnly ? this.cfg.virtualKeys.local : this.cfg.virtualKeys.cloud;
-    const payload = JSON.stringify({ ...body, model: chain[0], fallbacks: chain.slice(1) });
+    const payload = JSON.stringify({ ...body, model: chain[0], fallbacks: chain.slice(1), ...(onText ? { stream: true, stream_options: { include_usage: true } } : {}) });
 
     let last: ModelError | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -229,6 +233,15 @@ export class Router {
         if (signal?.aborted) throw err;
         last = new ModelError('gateway unreachable', 0, true);
         continue;
+      }
+      if (res.ok && onText && res.body && (res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+        try {
+          return await readStream(res.body, onText);
+        } catch (err) {
+          if (signal?.aborted || !(err instanceof ModelError)) throw err;
+          last = err;
+          continue;
+        }
       }
       const text = await res.text();
       let json: RawResponse = {};
@@ -273,6 +286,75 @@ export class Router {
     if (!res.ok) throw new ModelError(`Local model error HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`, res.status, false);
     return (await res.json()) as RawResponse;
   }
+}
+
+interface StreamChunk {
+  choices?: { delta?: { content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
+  usage?: RawResponse['usage'] | null;
+  model?: string;
+  extra_fields?: RawResponse['extra_fields'];
+  error?: { message?: string };
+}
+
+/**
+ * Read a server-sent-event stream of chat completion chunks and assemble the same shape a
+ * non-streamed call returns. Text is handed to `onText` as it arrives; tool calls arrive in
+ * fragments and are joined by index.
+ */
+export async function readStream(body: ReadableStream<Uint8Array>, onText: (delta: string) => void): Promise<RawResponse> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let finish: string | undefined;
+  const calls: NonNullable<Message['tool_calls']> = [];
+  const out: RawResponse = {};
+
+  const handle = (line: string) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    let chunk: StreamChunk;
+    try {
+      chunk = JSON.parse(data) as StreamChunk;
+    } catch {
+      return; // a partial or non-JSON keep-alive line
+    }
+    if (chunk.error) throw new ModelError(`stream error: ${chunk.error.message ?? 'unknown'}`, 502, true);
+    if (chunk.usage) out.usage = chunk.usage;
+    if (chunk.model) out.model = chunk.model;
+    if (chunk.extra_fields?.routing_info?.provider || chunk.extra_fields?.provider) out.extra_fields = chunk.extra_fields;
+    const choice = chunk.choices?.[0];
+    if (!choice) return;
+    if (choice.finish_reason) finish = choice.finish_reason;
+    const delta = choice.delta;
+    if (typeof delta?.content === 'string' && delta.content) {
+      content += delta.content;
+      onText(delta.content);
+    }
+    for (const part of delta?.tool_calls ?? []) {
+      const call = (calls[part.index ?? 0] ??= { id: '', type: 'function', function: { name: '', arguments: '' } });
+      if (part.id) call.id = part.id;
+      if (part.function?.name && !call.function.name) call.function.name = part.function.name;
+      if (part.function?.arguments) call.function.arguments += part.function.arguments;
+    }
+  };
+
+  const reader = body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      handle(buffer.slice(0, nl).trimEnd());
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  handle(buffer.trim());
+
+  const toolCalls = calls.filter(Boolean);
+  out.choices = [{ message: { role: 'assistant', content: content || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, finish_reason: finish }];
+  return out;
 }
 
 export function emptyStats(): Stats {

@@ -31,6 +31,8 @@ export interface AgentOptions {
    * trimming, no compaction, no loop cut-off. The safety rules are identical in both modes.
    */
   naive?: boolean;
+  /** Emit reply text as it is written. Front ends that render live turn this on. */
+  stream?: boolean;
 }
 
 export class Agent {
@@ -45,6 +47,7 @@ export class Agent {
   private system: Message;
   private forceTier?: Tier;
   private naive = false;
+  private stream = false;
   private abort: AbortController | null = null;
 
   constructor(o: AgentOptions) {
@@ -66,6 +69,7 @@ export class Agent {
       naive: o.naive,
     });
     this.naive = !!o.naive;
+    this.stream = !!o.stream;
     this.system = { role: 'system', content: this.systemPrompt() };
   }
 
@@ -144,6 +148,7 @@ export class Agent {
     const signal = this.abort.signal;
     let struggle = 0;
     let nudged = false;
+    let streamed = false;
     let guardNudges = 0;
     let unverified = false;
     let canVerify = true;
@@ -161,7 +166,17 @@ export class Agent {
 
         let completion;
         try {
-          completion = await this.router.complete([this.system, ...s.messages], this.tools.specs(), this.tier(), signal);
+          // Stream cloud replies to the screen as they are written. Local replies are not
+          // streamed: small models write tool calls as text, which is not for the user's eyes.
+          streamed = false;
+          const onText =
+            this.stream && !this.router.localOnly
+              ? (delta: string) => {
+                  streamed = true;
+                  this.frontend.emit({ type: 'text_delta', text: delta });
+                }
+              : undefined;
+          completion = await this.router.complete([this.system, ...s.messages], this.tools.specs(), this.tier(), signal, onText);
         } catch (err) {
           if (signal.aborted) return this.end('stopped');
           if (err instanceof BudgetExceededError) {
@@ -178,6 +193,7 @@ export class Agent {
         const text = calls.fromText ? '' : (completion.message.content ?? '').trim();
         s.messages.push({ role: 'assistant', content: text || null, ...(calls.list.length ? { tool_calls: calls.list } : {}) });
         if (text) this.frontend.emit({ type: 'text', text });
+        else if (streamed) this.frontend.emit({ type: 'text_clear' });
 
         if (calls.list.length === 0) {
           // A reply cut off at the output limit is not a finished answer: ask the model to carry on.

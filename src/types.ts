@@ -68,6 +68,10 @@ export interface Stats {
 
 /** Everything a front end needs to render a session. The terminal and the web UI consume the same stream. */
 export type AgentEvent =
+  /** A piece of the reply as it is being written. Always followed by `text` (the whole reply) or `text_clear`. */
+  | { type: 'text_delta'; text: string }
+  /** The streamed pieces turned out not to be a message for the user; remove them. */
+  | { type: 'text_clear' }
   | { type: 'text'; text: string }
   | { type: 'tool_start'; id: string; tool: string; summary: string; category: Category }
   | { type: 'tool_end'; id: string; ok: boolean; preview: string }

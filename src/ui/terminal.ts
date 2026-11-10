@@ -18,6 +18,9 @@ export class TerminalUI implements Frontend {
   /** Resolves when the current turn ends. */
   private turnDone: (() => void) | null = null;
   private closed = false;
+  /** True while a streamed reply is being written to the screen. */
+  private streaming = false;
+  private resumeSpinner = false;
   /** Tool calls in flight that are shell or git commands, whose output is worth showing. */
   private commands = new Set<string>();
   private pendingAnswer: ((answer: string) => void) | null = null;
@@ -61,8 +64,24 @@ export class TerminalUI implements Frontend {
 
   emit(e: AgentEvent): void {
     switch (e.type) {
+      case 'text_delta':
+        // The reply is written to the screen as it arrives.
+        if (!this.streaming) {
+          this.resumeSpinner = !!this.spin;
+          this.stopSpinner();
+          process.stdout.write('\n');
+          this.streaming = true;
+        }
+        process.stdout.write(e.text);
+        break;
       case 'text':
-        this.print(`\n${e.text}`);
+      case 'text_clear':
+        if (this.streaming) {
+          // Already on screen: finish the line and carry on.
+          this.streaming = false;
+          process.stdout.write('\n');
+          if (this.resumeSpinner && this.turnDone) this.startSpinner('working');
+        } else if (e.type === 'text') this.print(`\n${e.text}`);
         break;
       case 'tool_start': {
         const mark = e.category === 'read' ? c.dim('●') : e.category === 'write' ? c.green('●') : c.magenta('●');
